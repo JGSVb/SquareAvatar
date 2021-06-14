@@ -3,20 +3,13 @@
 import os
 
 from PIL import Image, ImageChops
+from math import pi as PI
 
+import cairo
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GObject, GdkPixbuf, Gdk
-import cairo
 
-from math import pi
-PI = pi
-
-class CONFIG:
-
-    mask_filename = "mask.png"
-    input_folder = "input"
-    output_folder = "output"
 
 
 def mask_image(mask_image : Image.Image, image : Image.Image):
@@ -40,11 +33,11 @@ def mask_image_from_filename(mask_filename : str, image_filename : str):
     return mask_image(m, i)
 
 
-def image_chooser_dialog(title = "Escolher Imagem"):
+def image_chooser_dialog(title = "Escolher Imagem", parent = None):
 
     dialog = Gtk.FileChooserDialog(
         title = title,
-        parent = None,
+        parent = parent,
         action = Gtk.FileChooserAction.OPEN)
 
     dialog.add_buttons(
@@ -69,8 +62,7 @@ def cairo_rounded_rectangle(ctx : cairo.Context, x : float, y : float, width : f
     # https://www.cairographics.org/samples/rounded_rectangle/
     # Cairo é complicado então utilizei esse código :thumbsup:
 
-    radius = radius
-    degrees = pi / 180
+    degrees = PI / 180
 
     x -= width / 2
     y -= height / 2
@@ -82,8 +74,20 @@ def cairo_rounded_rectangle(ctx : cairo.Context, x : float, y : float, width : f
     ctx.arc(x + radius, y + radius, radius, 180 * degrees, 270 * degrees)
     ctx.close_path()
 
-def cairo_rounded_square(ctx : cairo.Context, x : float, y : float, radius : float, border_radius : float): cairo_rounded_rectangle(ctx, x, y, radius, radius, radius * border_radius / 2)
+def cairo_relative_rounded_rectangle(ctx : cairo.Context, x : float, y : float, width : float, height : float, radius : float):
+    cairo_rounded_square(ctx, x, y, width, height, min(width, height) * radius / 2)
 
+def cairo_relative_rounded_square(ctx : cairo.Context, x : float, y : float, size : float, radius : float):
+    cairo_rounded_rectangle(ctx, x, y, size, size, size * radius / 2)
+
+def gdk_rectangle_new(x : int, y : int, width : int, height : int) -> Gdk.Rectangle:
+    r = Gdk.Rectangle()
+    r.x = x
+    r.y = y
+    r.width = width
+    r.height = height
+
+    return r
 
 class AvatarEditor(Gtk.DrawingArea):
     def __init__(self, *args, **kwargs):
@@ -97,17 +101,29 @@ class AvatarEditor(Gtk.DrawingArea):
             Gdk.EventMask.KEY_PRESS_MASK
         )
 
-        self.__avatar_image = None
-        self.__image_surface = None
+        self.__avatar_image : str                 = ""
+        self.__image_surface : cairo.ImageSurface = None
 
         self.__button_pressed : bool = False
-        self.__button_value = -1
-        self.__mouse_x = self.__mouse_y = -1
+        self.__button_value : int    = -1
+        self.__mouse_x : float       = -1
+        self.__mouse_y : float       = -1
 
-        self.__circle_radius_increment = 5
-        self.__border_radius = 0.30
-        self.__border_radius_increment = 0.05
-        self.__image_zoom = 0.10
+        self.__circle_radius : float           = 120
+        self.__circle_radius_increment : int   = 5
+        self.__border_radius : float           = 0.30
+        self.__border_radius_increment : float = 0.05
+        self.__circle_x = self.__circle_y      = 0
+
+        self.__image_zoom : float = 0.10
+
+        self.__image_pixbuf : GdkPixbuf.Pixbuf = None
+        self.__image_width                 = self.__image_height                 = 0
+        self.__image_width_ratio           = self.__image_height_ratio           = 0.0
+        self.__image_surface_x             = self.__image_surface_y              = 0.0
+        self.__image_surface_width         = self.__image_surface_height         = 0.0
+
+        self.__widget_width = self.__widget_height = 0
 
         self.connect("button-press-event", self.button_event)
         self.connect("button-release-event", self.button_event)
@@ -165,6 +181,7 @@ class AvatarEditor(Gtk.DrawingArea):
         return self.image_surface_scale(self.__image_surface_width * fac, self.__image_surface_height * fac)
 
     def center_image_surface(self):
+
         scaled = self.__image_pixbuf.copy()
 
         # Imagem é horizontal
@@ -184,13 +201,13 @@ class AvatarEditor(Gtk.DrawingArea):
     def do_realize(self):
         Gtk.DrawingArea.do_realize(self)
 
-        self.update_widget_dim()
+        self.update_widget_dimension()
         self.center_image_surface()
 
         self.__circle_radius = min(self.__widget_width, self.__widget_height) / 2 - 40
         self.__circle_x, self.__circle_y = self.__widget_width / 2, self.__widget_height / 2
 
-    def update_widget_dim(self):
+    def update_widget_dimension(self):
         self.__widget_width = self.get_allocated_width()
         self.__widget_height = self.get_allocated_height()
 
@@ -263,17 +280,25 @@ class AvatarEditor(Gtk.DrawingArea):
 
         if self.__button_pressed == 1 and self.__button_value == 2:
 
-            shift_x, shift_y = event.x - self.__mouse_x, event.y - self.__mouse_y
+            x = self.__image_surface_x + event.x - self.__mouse_x
+            y = self.__image_surface_y + event.y - self.__mouse_y
 
-            self.__image_surface_x += shift_x
-            self.__image_surface_y += shift_y
+            # TODO: Ainda não funciona bem, resolver depois da escola
+
+            image_rect = gdk_rectangle_new(x, y, self.__image_surface_width, self.__image_surface_height)
+            mask_rect = gdk_rectangle_new(self.__circle_x, self.__circle_y, self.__circle_radius, self.__circle_radius)
+
+            if mask_rect.intersect(image_rect)[1].equal(mask_rect):
+
+                self.__image_surface_x = x
+                self.__image_surface_y = y
 
             self.update_mouse_pos()
             self.queue_draw()
 
     def draw(self, widget : Gtk.Widget, ctx : cairo.Context):
 
-        self.update_widget_dim()
+        self.update_widget_dimension()
 
         if self.__image_surface:
 
@@ -289,9 +314,9 @@ class AvatarEditor(Gtk.DrawingArea):
 
             # Buraco no quadrado
             ctx.set_source_rgb(1, 1, 1)
-            cairo_rounded_square(ctx, self.__circle_x, self.__circle_y,
-                                 self.__circle_radius,
-                                 self.__border_radius)
+            cairo_relative_rounded_square(ctx, self.__circle_x, self.__circle_y,
+                                          self.__circle_radius,
+                                          self.__border_radius)
             ctx.fill()
 
             # Imagem
@@ -307,7 +332,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_default_size(500, 300)
 
         self.drawing = AvatarEditor()
-        self.drawing.set_avatar_image_from_filename(image_chooser_dialog())
+        self.drawing.set_avatar_image_from_filename("/home/asv/Imagens/fotos_de_perfil/fu4xjtknusw31 (1).jpg")
         self.add(self.drawing)
 
 
