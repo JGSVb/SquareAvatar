@@ -60,11 +60,10 @@ def image_chooser_dialog(title = "Escolher Imagem"):
 
     dialog.add_filter(file_filter)
 
-    if dialog.run() == Gtk.ResponseType.OK:
-        filename = dialog.get_filename()
-        dialog.destroy()
-        return filename
-    return None
+    dialog.run()
+    filename = dialog.get_filename()
+    dialog.destroy()
+    return filename
 
 def cairo_rounded_rectangle(ctx : cairo.Context, x : float, y : float, width : float, height : float, radius : float):
     # https://www.cairographics.org/samples/rounded_rectangle/
@@ -83,6 +82,8 @@ def cairo_rounded_rectangle(ctx : cairo.Context, x : float, y : float, width : f
     ctx.arc(x + radius, y + radius, radius, 180 * degrees, 270 * degrees)
     ctx.close_path()
 
+def cairo_rounded_square(ctx : cairo.Context, x : float, y : float, radius : float, border_radius : float): cairo_rounded_rectangle(ctx, x, y, radius, radius, radius * border_radius / 2)
+
 
 class AvatarEditor(Gtk.DrawingArea):
     def __init__(self, *args, **kwargs):
@@ -99,12 +100,13 @@ class AvatarEditor(Gtk.DrawingArea):
         self.__avatar_image = None
         self.__image_surface = None
 
-        self.__button_pressed = -1
+        self.__button_pressed : bool = False
         self.__button_value = -1
         self.__mouse_x = self.__mouse_y = -1
 
         self.__circle_radius_increment = 5
-        self.__border_radius = 10
+        self.__border_radius = 0.30
+        self.__border_radius_increment = 0.05
         self.__image_zoom = 0.10
 
         self.connect("button-press-event", self.button_event)
@@ -113,53 +115,6 @@ class AvatarEditor(Gtk.DrawingArea):
         self.connect("scroll-event", self.scroll_event)
 
         self.connect("draw", self.draw)
-
-    @GObject.Property(type = int, minimum = 0)
-    def circle_radius_increment(self):
-        return self.__circle_radius_increment
-    @circle_radius_increment.setter
-    def circle_radius_increment(self, val):
-        self.__circle_radius_increment = val
-        self.__circle_radius = 0
-
-    @GObject.Property(type = float, minimum = 0)
-    def image_zoom(self):
-        return self.__image_zoom
-    @image_zoom.setter
-    def image_zoom(self, val):
-        self.__image_zoom = val
-
-    @GObject.Property(type = float, minimum = 0)
-    def border_radius(self):
-        return self.__border_radius
-    @border_radius.setter
-    def border_radius(self, val):
-        self.__border_radius = val
-        self.queue_draw()
-
-    @GObject.Property(type = float)
-    def circle_x(self):
-        return self.__circle_x
-    @GObject.Property(type = float)
-    def circle_y(self):
-        return self.__circle_y
-    @GObject.Property(type = float)
-    def circle_radius(self):
-        return self.__circle_radius
-
-    @GObject.Property(type = float)
-    def image_surface_x(self):
-        return self.__image_surface_x
-    @GObject.Property(type = float)
-    def image_surface_y(self):
-        return self.__image_surface_y
-
-    @GObject.Property(type = float)
-    def image_surface_width(self):
-        return self.__image_surface_width
-    @GObject.Property(type = float)
-    def image_surface_height(self):
-        return self.__image_surface_height
 
     def get_avatar_image(self):
         return self.__avatar_image
@@ -249,49 +204,74 @@ class AvatarEditor(Gtk.DrawingArea):
 
         self.update_mouse_pos()
 
+
+    """
+    Ações relacionadas com evento de scrolling:
+
+        Aumentar o radio do círculo;
+        dar zoom na imagem;
+        aumentar o raio da borda.
+    """
+
+    def do_circle_radius_change(self, event : Gdk.EventScroll):
+        if event.direction == Gdk.ScrollDirection.UP:
+            self.__circle_radius += self.__circle_radius_increment
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            self.__circle_radius -= self.__circle_radius_increment
+
+    def do_image_zoom(self, event : Gdk.EventScroll):
+        if event.direction == Gdk.ScrollDirection.UP:
+
+            wb, hb = self.image_surface_proportional_scale(1 + self.__image_zoom)
+
+            self.__image_surface_x -= (self.__mouse_x - self.__image_surface_x) * (self.__image_zoom)
+            self.__image_surface_y -= (self.__mouse_y - self.__image_surface_y) * (self.__image_zoom)
+
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+
+            wb, hb = self.image_surface_proportional_scale(1 - self.__image_zoom)
+
+            self.__image_surface_x -= (self.__mouse_x - self.__image_surface_x) * (1 - self.__image_zoom - 1)
+            self.__image_surface_y -= (self.__mouse_y - self.__image_surface_y) * (1 - self.__image_zoom - 1)
+
+    def do_border_radius_change(self, event : Gdk.EventScroll):
+        if event.direction == Gdk.ScrollDirection.UP:
+            self.__border_radius += self.__border_radius_increment
+
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            self.__border_radius -= self.__border_radius_increment
+
+        # 0 <= border_radius <= 1
+        self.__border_radius = max(min(self.__border_radius, 1), 0)
+
     def scroll_event(self, widget : Gtk.Widget, event : Gdk.EventScroll):
 
         self.update_mouse_pos()
 
-
         if event.state == Gdk.ModifierType.CONTROL_MASK:
+            self.do_circle_radius_change(event)
 
-            # Zoom no raio do círulo
-            if event.direction == Gdk.ScrollDirection.UP:
-                self.__circle_radius += self.__circle_radius_increment
-            elif event.direction == Gdk.ScrollDirection.DOWN:
-                self.__circle_radius -= self.__circle_radius_increment
+        elif event.state == Gdk.ModifierType.SHIFT_MASK:
+            self.do_border_radius_change(event)
 
-        else:
-            # Zoom na imagem
-            if event.direction == Gdk.ScrollDirection.UP:
-
-                wb, hb = self.image_surface_proportional_scale(1 + self.__image_zoom)
-
-                self.__image_surface_x -= (self.__mouse_x - self.__image_surface_x) * (self.__image_zoom)
-                self.__image_surface_y -= (self.__mouse_y - self.__image_surface_y) * (self.__image_zoom)
-
-            elif event.direction == Gdk.ScrollDirection.DOWN:
-
-                wb, hb = self.image_surface_proportional_scale(1 - self.__image_zoom)
-
-                self.__image_surface_x -= (self.__mouse_x - self.__image_surface_x) * (1 - self.__image_zoom - 1)
-                self.__image_surface_y -= (self.__mouse_y - self.__image_surface_y) * (1 - self.__image_zoom - 1)
+        elif event.state == 0:
+            self.do_image_zoom(event)
 
         self.queue_draw()
 
-    def mouse_move_event(self, widget : Gtk.Widget, event):
+    def mouse_move_event(self, widget : Gtk.Widget, event : Gdk.EventMotion):
 
         if self.__button_pressed == 1 and self.__button_value == 2:
 
-            self.__image_surface_x += event.x - self.__mouse_x
-            self.__image_surface_y += event.y - self.__mouse_y
+            shift_x, shift_y = event.x - self.__mouse_x, event.y - self.__mouse_y
 
+            self.__image_surface_x += shift_x
+            self.__image_surface_y += shift_y
 
             self.update_mouse_pos()
             self.queue_draw()
 
-    def draw(self, wid, ctx):
+    def draw(self, widget : Gtk.Widget, ctx : cairo.Context):
 
         self.update_widget_dim()
 
@@ -309,17 +289,15 @@ class AvatarEditor(Gtk.DrawingArea):
 
             # Buraco no quadrado
             ctx.set_source_rgb(1, 1, 1)
-            cairo_rounded_rectangle(ctx, self.__circle_x, self.__circle_y,
-                                    self.__circle_radius, self.__circle_radius + 10,
-                                    self.__border_radius)
+            cairo_rounded_square(ctx, self.__circle_x, self.__circle_y,
+                                 self.__circle_radius,
+                                 self.__border_radius)
             ctx.fill()
 
             # Imagem
             ctx.set_operator(cairo.OPERATOR_MULTIPLY)
             ctx.set_source_surface(self.__image_surface, self.__image_surface_x, self.__image_surface_y)
             ctx.paint()
-
-
 
 
 class MainWindow(Gtk.ApplicationWindow):
