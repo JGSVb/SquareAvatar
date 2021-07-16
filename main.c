@@ -1,5 +1,4 @@
 #include <gtk/gtk.h>
-#include <locale.h>
 
 #include "application.h"
 

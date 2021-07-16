@@ -1,5 +1,4 @@
 #include <gtk/gtk.h>
-#include <glib/gi18n.h>
 #include "savebutton.h"
 #include "editor.h"
 
