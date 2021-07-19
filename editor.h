@@ -56,3 +56,4 @@ int editor_load_image_from_pixbuf(Editor * editor, GdkPixbuf * pb);
 int editor_load_image_from_filename(Editor * editor, const char * filename);
 int editor_fit_image(Editor * editor);
 gboolean editor_get_loaded(Editor * editor);
+GdkPixbuf * editor_get_final_image(Editor * editor, int size, gboolean inscribed);

@@ -1,12 +1,13 @@
 #include "utils.h"
 #include <cairo/cairo.h>
+#include <math.h>
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 void cairo_rounded_rectangle(cairo_t * cr, double x, double y, double width, double height, float radius){
 	// https://www.cairographics.org/samples/rounded_rectangle/
 
-	double degrees = PI / 180.0;
+	double degrees = M_PI / 180.0;
 	double P_radius = radius * MIN(width, height) / 2;
 
 	cairo_new_sub_path(cr);

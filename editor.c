@@ -3,7 +3,6 @@
 
 #include <gtk/gtk.h>
 
-#include "cairo.h"
 #include "editor.h"
 #include "utils.h"
 
@@ -24,7 +23,7 @@ static gboolean editor_button_press_release_event(GtkWidget * editor, GdkEventBu
 static gboolean editor_scroll_event(GtkWidget * editor, GdkEventScroll * event);
 
 static int editor_no_draw_image_move(Editor * editor, double x, double y);
-static int editor_no_draw_image_scale(Editor * editor, int width, int height);
+static int editor_no_draw_image_scale(Editor * editor, int width, int height, GdkInterpType interp);
 static int editor_no_draw_mask_move(Editor * editor, double x, double y);
 static int editor_no_draw_change_mask_radius(Editor * editor, float radius);
 static int editor_no_draw_change_mask_size(Editor * editor, int size);
@@ -174,13 +173,6 @@ static void editor_set_property(GObject * object, guint prop_id, const GValue * 
 
 	switch(prop_id){
 
-		/*
-		// READONLY
-		case(PROP_IMAGE_LOADED):
-			priv->image.loaded = g_value_get_boolean(value);
-			break;
-		*/
-
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
 			break;
@@ -306,12 +298,12 @@ static void editor_ajust_image_size_and_position_to_make_everything_beautiful(Ed
 
 			editor_no_draw_image_scale(editor,
 					priv->mask.size,
-					(double)priv->mask.size * ((double)1 / priv->image.aspect_ratio));
+					(double)priv->mask.size * ((double)1 / priv->image.aspect_ratio), GDK_INTERP_BILINEAR);
 		} else {
 
 			editor_no_draw_image_scale(editor,
 					(double)priv->mask.size * priv->image.aspect_ratio,
-					priv->mask.size);
+					priv->mask.size, GDK_INTERP_BILINEAR);
 		}
 
 	}
@@ -339,7 +331,7 @@ static int editor_no_draw_image_move(Editor * editor, double x, double y){
 
 }
 
-static int editor_no_draw_image_scale(Editor * editor, int width, int height){
+static int editor_no_draw_image_scale(Editor * editor, int width, int height, GdkInterpType interp){
 
 	EditorPrivate * priv = editor->priv;
 
@@ -349,9 +341,7 @@ static int editor_no_draw_image_scale(Editor * editor, int width, int height){
 	priv->image.t_width  = width;
 	priv->image.t_height = height;
 
-	GdkPixbuf * scaled = gdk_pixbuf_scale_simple(priv->image.original,
-			width, height,
-			((width > priv->image.o_width) || (height > priv->image.o_height) ? GDK_INTERP_NEAREST : GDK_INTERP_BILINEAR));
+	GdkPixbuf * scaled = gdk_pixbuf_scale_simple(priv->image.original, width, height, interp);
 
 	g_object_unref(priv->image.transformed);
 	priv->image.transformed = scaled;
@@ -366,32 +356,39 @@ int editor_fit_image(Editor * editor){
 
 	GtkWidget * widget = GTK_WIDGET(editor);
 
-	double wid_wid = gtk_widget_get_allocated_width(widget);
-	double wid_hei = gtk_widget_get_allocated_height(widget);
+	int wid_wid = gtk_widget_get_allocated_width(widget);
+	int wid_hei = gtk_widget_get_allocated_height(widget);
 
-	double width, height, x, y;
+	int width, height;
+	double x, y;
+
+	// imagem quadrada
+	if(priv->image.o_width == priv->image.o_height){
+
+		int size = MIN(wid_wid, wid_hei);
+		width = height = size;
 
 	// imagem horizontal
-	if(priv->image.o_width > priv->image.o_height){
+	} else if(priv->image.o_width > priv->image.o_height){
 
 		width = wid_wid;
-		height = wid_wid * 1.0f / priv->image.aspect_ratio;
+		height = (double)wid_wid * (1.0f / priv->image.aspect_ratio);
 
-		x = 0;
-		y = wid_hei / 2 - height / 2;
-
-	// imagem vertical ou quadrada
+	// imagem vertical
 	} else {
 
 		height = wid_hei;
-		width = height * priv->image.aspect_ratio;
-		x = wid_wid / 2 - width / 2;
-		y = 0;
-
+		width = (double)height * priv->image.aspect_ratio;
 	}
 
-	if((editor_no_draw_image_scale(editor, width, height)) == -1 ||
-		 (editor_no_draw_image_move(editor, x, y) == -1)) return -1;
+	x = (double)wid_wid / 2 - (double)width / 2;
+	y = (double)wid_hei / 2 - (double)height / 2;
+
+	g_return_val_if_fail(editor_no_draw_image_scale(editor, width, height, GDK_INTERP_BILINEAR) == 0, -1);
+	g_return_val_if_fail(editor_no_draw_image_move(editor, x, y) == 0, -1);
+
+	g_debug("Widget tem tamanho alocado de %dx%d", wid_wid, wid_hei);
+	g_debug("Imagem ajustada para %dx%d+%f+%f", width, height, x, y);
 
 	gtk_widget_queue_draw(widget);
 
@@ -414,7 +411,7 @@ int editor_zoom(Editor * editor, float zoom, double x, double y){
 			                 	priv->image.y - (y - priv->image.y) * ((double)dest_height / priv->image.t_height - 1)) != 0)
 		return -1;
 
-	if(editor_no_draw_image_scale(editor, dest_width, dest_height) != 0)
+	if(editor_no_draw_image_scale(editor, dest_width, dest_height, GDK_INTERP_BILINEAR) != 0)
 		return -1;
 
 	gtk_widget_queue_draw(widget);
@@ -453,6 +450,77 @@ static int editor_no_draw_change_mask_size(Editor * editor, int size){
 	return 0;
 }
 
+GdkPixbuf * editor_get_final_image(Editor * editor, int size, gboolean inscribed){
+	
+	g_return_val_if_fail(size > 0, NULL);
+
+	EditorPrivate * priv = editor->priv;
+	GdkPixbuf * out;
+	int diameter, x, y;
+	cairo_surface_t * surface;
+	cairo_surface_t * image_surface;
+	cairo_t * cr;
+
+
+	// NOTE(image): Fazer uma imagem quadrada de tamanho definido
+	{
+		int width, height;
+		double fac;
+		GdkPixbuf * scaled, * cropped;
+
+		fac 	 = (double)size / priv->mask.size;
+
+		x			 = (priv->mask.x - priv->image.x) * fac;
+		y			 = (priv->mask.y - priv->image.y) * fac;
+
+		height = priv->image.t_height * fac;
+		width  = height * priv->image.aspect_ratio;
+
+		scaled = gdk_pixbuf_scale_simple(priv->image.original, width, height, GDK_INTERP_HYPER);
+		cropped = gdk_pixbuf_new_subpixbuf(scaled, x, y, size, size);
+		g_object_unref(scaled);
+
+		image_surface = gdk_cairo_surface_create_from_pixbuf(cropped, 0, NULL);
+	}
+
+	// NOTE: Colocar a imagem como se fosse dentro de um círculo caso `inscribed` seja TRUE
+	// Caso contrário, apenas colocar a imagem normalmente
+	// Preparar desenho
+	{
+
+		diameter = LERP(priv->mask.radius, size * M_SQRT2, size);
+		int radius = diameter / 2;
+
+		if(inscribed){
+
+			y = x = radius - size / 2;
+			surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, diameter, diameter);
+
+		} else {
+			x = y = 0;
+			surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+		}
+
+		cr = cairo_create(surface);
+
+		cairo_set_source_surface(cr, image_surface, x, y);
+		cairo_rounded_rectangle(cr, x, y, size, size, priv->mask.radius);
+		cairo_clip(cr);
+		cairo_paint(cr);
+
+	}
+
+	cairo_destroy(cr);
+
+	if(inscribed)
+		out = gdk_pixbuf_get_from_surface(surface, 0, 0, diameter, diameter);
+	else
+		out = gdk_pixbuf_get_from_surface(surface, 0, 0, size, size);
+
+	cairo_surface_destroy(surface);
+
+	return out;
+}
 /*
  *
  *	CALLBACKS
@@ -508,7 +576,7 @@ static gboolean editor_draw(GtkWidget * widget, cairo_t * cr){
 	}
 
 	// mask
-	cairo_set_source_gray_tone(cr, 0.2);
+	cairo_set_source_gray_tone(cr, 0.1);
 	cairo_rectangle(cr, priv->image.real_x, priv->image.real_y, priv->image.t_width, priv->image.t_height);
 	cairo_fill(cr);
 
@@ -536,14 +604,12 @@ static gboolean editor_draw(GtkWidget * widget, cairo_t * cr){
 static gboolean editor_button_press_release_event(GtkWidget * widget, GdkEventButton * event){
 
 	EditorPrivate * priv;
-	priv = EDITOR(widget)->priv;
+	Editor * editor = EDITOR(widget);
+	priv = editor->priv;
 
 	gtk_widget_grab_focus(widget);
 
-	if(event->type == GDK_BUTTON_RELEASE)
-		priv->mouse.button = 0;
-	else
-		priv->mouse.button = event->button;
+	priv->mouse.button = event->type;
 
 	return FALSE;
 
@@ -558,7 +624,7 @@ static gboolean editor_motion_notify_event(GtkWidget * widget, GdkEventMotion * 
 	priv = editor->priv;
 
 
-	if(priv->mouse.button == 1){
+	if(priv->mouse.button == GDK_BUTTON_PRESS){
 
 		editor_no_draw_image_move(editor,
 				priv->image.x + event->x - priv->mouse.x,

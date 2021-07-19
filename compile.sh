@@ -4,7 +4,7 @@ CC=gcc
 FLAGS="-g3 -Wall -Wextra -Wpedantic"
 GTK=$(pkg-config gtk+-3.0 --cflags --libs)
 
-SOURCES="main.c application.c mainwindow.c editor.c savebutton.c utils.c"
+SOURCES="main.c application.c mainwindow.c editor.c utils.c"
 OBJ_DIR=obj
 OUTPUT=main
 
